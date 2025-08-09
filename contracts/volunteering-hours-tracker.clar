@@ -4,9 +4,11 @@
 (define-constant ERR_ALREADY_EXISTS (err u409))
 (define-constant ERR_INVALID_INPUT (err u400))
 (define-constant ERR_INSUFFICIENT_HOURS (err u402))
+(define-constant ERR_GOAL_NOT_ACHIEVED (err u403))
 
 (define-data-var next-log-id uint u1)
 (define-data-var next-activity-id uint u1)
+(define-data-var next-milestone-id uint u1)
 
 (define-map volunteers
   principal
@@ -56,6 +58,24 @@
   (list 100 principal)
 )
 
+(define-map milestones
+  uint
+  {
+    volunteer: principal,
+    target-hours: uint,
+    deadline: uint,
+    description: (string-ascii 200),
+    is-achieved: bool,
+    achieved-block: (optional uint),
+    creation-block: uint
+  }
+)
+
+(define-map volunteer-milestones
+  principal
+  (list 20 uint)
+)
+
 (define-read-only (get-volunteer-info (volunteer principal))
   (map-get? volunteers volunteer)
 )
@@ -87,6 +107,49 @@
 (define-read-only (is-activity-active (activity-id uint))
   (match (map-get? activities activity-id)
     activity (get is-active activity)
+    false
+  )
+)
+
+(define-read-only (get-milestone-info (milestone-id uint))
+  (map-get? milestones milestone-id)
+)
+
+(define-read-only (get-volunteer-milestones (volunteer principal))
+  (default-to (list) (map-get? volunteer-milestones volunteer))
+)
+
+(define-read-only (get-milestone-progress (milestone-id uint))
+  (match (map-get? milestones milestone-id)
+    milestone
+    (let
+      (
+        (volunteer-hours (get-volunteer-verified-hours (get volunteer milestone)))
+        (target-hours (get target-hours milestone))
+      )
+      (ok {
+        current-hours: volunteer-hours,
+        target-hours: target-hours,
+        progress-percentage: (if (> target-hours u0) 
+                               (/ (* volunteer-hours u100) target-hours) 
+                               u0),
+        is-achieved: (get is-achieved milestone)
+      })
+    )
+    ERR_NOT_FOUND
+  )
+)
+
+(define-read-only (is-milestone-achievable (milestone-id uint))
+  (match (map-get? milestones milestone-id)
+    milestone
+    (let
+      (
+        (volunteer-hours (get-volunteer-verified-hours (get volunteer milestone)))
+        (target-hours (get target-hours milestone))
+      )
+      (>= volunteer-hours target-hours)
+    )
     false
   )
 )
@@ -253,6 +316,60 @@
 
 (define-read-only (get-leaderboard-by-verified-hours)
   (ok "Feature not implemented in MVP")
+)
+
+(define-public (create-milestone (target-hours uint) (deadline uint) (description (string-ascii 200)))
+  (let
+    (
+      (milestone-id (var-get next-milestone-id))
+      (volunteer-info (unwrap! (map-get? volunteers tx-sender) ERR_NOT_AUTHORIZED))
+      (current-milestones (get-volunteer-milestones tx-sender))
+    )
+    (asserts! (get is-active volunteer-info) ERR_NOT_AUTHORIZED)
+    (asserts! (> target-hours u0) ERR_INVALID_INPUT)
+    (asserts! (> deadline stacks-block-height) ERR_INVALID_INPUT)
+    (asserts! (< (len current-milestones) u20) ERR_INVALID_INPUT)
+    
+    (map-set milestones milestone-id
+      {
+        volunteer: tx-sender,
+        target-hours: target-hours,
+        deadline: deadline,
+        description: description,
+        is-achieved: false,
+        achieved-block: none,
+        creation-block: stacks-block-height
+      }
+    )
+    
+    (map-set volunteer-milestones tx-sender
+      (unwrap! (as-max-len? (append current-milestones milestone-id) u20) ERR_INVALID_INPUT)
+    )
+    
+    (var-set next-milestone-id (+ milestone-id u1))
+    (ok milestone-id)
+  )
+)
+
+(define-public (achieve-milestone (milestone-id uint))
+  (let
+    (
+      (milestone-info (unwrap! (map-get? milestones milestone-id) ERR_NOT_FOUND))
+      (volunteer-hours (get-volunteer-verified-hours (get volunteer milestone-info)))
+      (target-hours (get target-hours milestone-info))
+    )
+    (asserts! (is-eq tx-sender (get volunteer milestone-info)) ERR_NOT_AUTHORIZED)
+    (asserts! (not (get is-achieved milestone-info)) ERR_ALREADY_EXISTS)
+    (asserts! (>= volunteer-hours target-hours) ERR_GOAL_NOT_ACHIEVED)
+    
+    (map-set milestones milestone-id
+      (merge milestone-info {
+        is-achieved: true,
+        achieved-block: (some stacks-block-height)
+      })
+    )
+    (ok true)
+  )
 )
 
 (define-read-only (get-organization-stats (organization (string-ascii 100)))
