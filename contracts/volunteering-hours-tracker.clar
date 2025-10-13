@@ -6,11 +6,14 @@
 (define-constant ERR_INSUFFICIENT_HOURS (err u402))
 (define-constant ERR_GOAL_NOT_ACHIEVED (err u403))
 (define-constant ERR_BADGE_ALREADY_EARNED (err u405))
+(define-constant ERR_SELF_ENDORSEMENT (err u406))
+(define-constant ERR_NO_SHARED_ACTIVITY (err u407))
 
 (define-data-var next-log-id uint u1)
 (define-data-var next-activity-id uint u1)
 (define-data-var next-milestone-id uint u1)
 (define-data-var next-badge-id uint u1)
+(define-data-var next-endorsement-id uint u1)
 
 (define-map volunteers
   principal
@@ -101,6 +104,34 @@
 (define-map volunteer-badge-list
   principal
   (list 50 uint)
+)
+
+(define-map endorsements
+  uint
+  {
+    endorser: principal,
+    endorsed: principal,
+    activity-id: uint,
+    message: (string-ascii 200),
+    skill-category: (string-ascii 50),
+    rating: uint,
+    endorsement-block: uint
+  }
+)
+
+(define-map volunteer-endorsements-received
+  principal
+  (list 50 uint)
+)
+
+(define-map volunteer-endorsements-given
+  principal
+  (list 50 uint)
+)
+
+(define-map endorsement-check
+  {endorser: principal, endorsed: principal, activity-id: uint}
+  bool
 )
 
 (define-read-only (get-volunteer-info (volunteer principal))
@@ -218,6 +249,52 @@
       )
     )
     false
+  )
+)
+
+(define-read-only (get-endorsement-info (endorsement-id uint))
+  (map-get? endorsements endorsement-id)
+)
+
+(define-read-only (get-volunteer-endorsements-received (volunteer principal))
+  (default-to (list) (map-get? volunteer-endorsements-received volunteer))
+)
+
+(define-read-only (get-volunteer-endorsements-given (volunteer principal))
+  (default-to (list) (map-get? volunteer-endorsements-given volunteer))
+)
+
+(define-read-only (count-endorsements-received (volunteer principal))
+  (len (get-volunteer-endorsements-received volunteer))
+)
+
+(define-read-only (has-endorsed (endorser principal) (endorsed principal) (activity-id uint))
+  (default-to false (map-get? endorsement-check {endorser: endorser, endorsed: endorsed, activity-id: activity-id}))
+)
+
+(define-read-only (get-endorsement-rating-average (volunteer principal))
+  (let
+    (
+      (endorsement-ids (get-volunteer-endorsements-received volunteer))
+      (total-endorsements (len endorsement-ids))
+    )
+    (if (> total-endorsements u0)
+      (ok u0)
+      (ok u0)
+    )
+  )
+)
+
+(define-private (have-shared-activity (volunteer-a principal) (volunteer-b principal))
+  (let
+    (
+      (volunteer-a-info (unwrap! (map-get? volunteers volunteer-a) false))
+      (volunteer-b-info (unwrap! (map-get? volunteers volunteer-b) false))
+    )
+    (and 
+      (> (get total-hours volunteer-a-info) u0)
+      (> (get total-hours volunteer-b-info) u0)
+    )
   )
 )
 
@@ -517,6 +594,59 @@
     (try! (create-badge "Champion" "Reached 100 verified hours" "verified-hours" u100 "trophy"))
     (try! (create-badge "Hero" "Reached 500 verified hours" "verified-hours" u500 "superhero"))
     (ok true)
+  )
+)
+
+(define-public (endorse-volunteer (endorsed principal) (activity-id uint) (message (string-ascii 200)) (skill-category (string-ascii 50)) (rating uint))
+  (let
+    (
+      (endorsement-id (var-get next-endorsement-id))
+      (endorser-info (unwrap! (map-get? volunteers tx-sender) ERR_NOT_AUTHORIZED))
+      (endorsed-info (unwrap! (map-get? volunteers endorsed) ERR_NOT_FOUND))
+      (activity-info (unwrap! (map-get? activities activity-id) ERR_NOT_FOUND))
+      (endorser-received (get-volunteer-endorsements-received endorsed))
+      (endorser-given (get-volunteer-endorsements-given tx-sender))
+      (endorser-activity-hours (get-volunteer-activity-hours tx-sender activity-id))
+      (endorsed-activity-hours (get-volunteer-activity-hours endorsed activity-id))
+    )
+    (asserts! (not (is-eq tx-sender endorsed)) ERR_SELF_ENDORSEMENT)
+    (asserts! (get is-active endorser-info) ERR_NOT_AUTHORIZED)
+    (asserts! (get is-active endorsed-info) ERR_NOT_FOUND)
+    (asserts! (> endorser-activity-hours u0) ERR_NO_SHARED_ACTIVITY)
+    (asserts! (> endorsed-activity-hours u0) ERR_NO_SHARED_ACTIVITY)
+    (asserts! (not (has-endorsed tx-sender endorsed activity-id)) ERR_ALREADY_EXISTS)
+    (asserts! (and (>= rating u1) (<= rating u5)) ERR_INVALID_INPUT)
+    (asserts! (> (len skill-category) u0) ERR_INVALID_INPUT)
+    (asserts! (< (len endorser-received) u50) ERR_INVALID_INPUT)
+    (asserts! (< (len endorser-given) u50) ERR_INVALID_INPUT)
+    
+    (map-set endorsements endorsement-id
+      {
+        endorser: tx-sender,
+        endorsed: endorsed,
+        activity-id: activity-id,
+        message: message,
+        skill-category: skill-category,
+        rating: rating,
+        endorsement-block: stacks-block-height
+      }
+    )
+    
+    (map-set volunteer-endorsements-received endorsed
+      (unwrap! (as-max-len? (append endorser-received endorsement-id) u50) ERR_INVALID_INPUT)
+    )
+    
+    (map-set volunteer-endorsements-given tx-sender
+      (unwrap! (as-max-len? (append endorser-given endorsement-id) u50) ERR_INVALID_INPUT)
+    )
+    
+    (map-set endorsement-check 
+      {endorser: tx-sender, endorsed: endorsed, activity-id: activity-id}
+      true
+    )
+    
+    (var-set next-endorsement-id (+ endorsement-id u1))
+    (ok endorsement-id)
   )
 )
 
