@@ -134,6 +134,43 @@
   bool
 )
 
+(define-map activity-verifiers
+  uint
+  (list 50 principal)
+)
+
+(define-map activity-verifier-check
+  {activity-id: uint, verifier: principal}
+  bool
+)
+
+(define-read-only (get-activity-verifiers (activity-id uint))
+  (default-to (list) (map-get? activity-verifiers activity-id))
+)
+
+(define-read-only (is-activity-verifier (activity-id uint) (verifier principal))
+  (default-to false (map-get? activity-verifier-check {activity-id: activity-id, verifier: verifier}))
+)
+
+(define-public (add-activity-verifier (activity-id uint) (verifier principal))
+  (let
+    (
+      (activity-info (unwrap! (map-get? activities activity-id) ERR_NOT_FOUND))
+      (current (default-to (list) (map-get? activity-verifiers activity-id)))
+      (already (default-to false (map-get? activity-verifier-check {activity-id: activity-id, verifier: verifier})))
+    )
+    (asserts! (or (is-eq tx-sender CONTRACT_OWNER)
+                  (is-eq tx-sender (get created-by activity-info))) ERR_NOT_AUTHORIZED)
+    (asserts! (get is-active activity-info) ERR_NOT_FOUND)
+    (asserts! (not already) ERR_ALREADY_EXISTS)
+    (asserts! (< (len current) u50) ERR_INVALID_INPUT)
+    (map-set activity-verifiers activity-id
+      (unwrap! (as-max-len? (append current verifier) u50) ERR_INVALID_INPUT))
+    (map-set activity-verifier-check {activity-id: activity-id, verifier: verifier} true)
+    (ok true)
+  )
+)
+
 (define-read-only (get-volunteer-info (volunteer principal))
   (map-get? volunteers volunteer)
 )
@@ -392,8 +429,9 @@
       (current-verified (get verified-hours volunteer-info))
       (hours-to-verify (get hours log-info))
     )
-    (asserts! (or (is-eq tx-sender CONTRACT_OWNER) 
-                  (is-eq tx-sender (get created-by activity-info))) ERR_NOT_AUTHORIZED)
+    (asserts! (or (is-eq tx-sender CONTRACT_OWNER)
+                  (is-eq tx-sender (get created-by activity-info))
+                  (is-activity-verifier (get activity-id log-info) tx-sender)) ERR_NOT_AUTHORIZED)
     (asserts! (not (get is-verified log-info)) ERR_ALREADY_EXISTS)
     
     (map-set time-logs log-id
