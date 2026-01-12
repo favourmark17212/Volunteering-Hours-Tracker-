@@ -688,6 +688,31 @@
   )
 )
 
+(define-read-only (get-volunteer-summary (volunteer principal))
+  (match (map-get? volunteers volunteer)
+    info
+    (let
+      (
+        (badge-list (default-to (list) (map-get? volunteer-badge-list volunteer)))
+        (received (default-to (list) (map-get? volunteer-endorsements-received volunteer)))
+        (given (default-to (list) (map-get? volunteer-endorsements-given volunteer)))
+      )
+      (ok {
+        name: (get name info),
+        email: (get email info),
+        total-hours: (get total-hours info),
+        verified-hours: (get verified-hours info),
+        registration-block: (get registration-block info),
+        is-active: (get is-active info),
+        badges-count: (len badge-list),
+        endorsements-received-count: (len received),
+        endorsements-given-count: (len given)
+      })
+    )
+    ERR_NOT_FOUND
+  )
+)
+
 (define-read-only (get-organization-stats (organization (string-ascii 100)))
   (ok "Feature not implemented in MVP")
 )
